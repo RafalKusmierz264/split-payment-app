@@ -23,7 +23,9 @@ const GroupSchema = new mongoose.Schema(
     deletedAt: { type: Date, default: null },
     isClosed: { type: Boolean, default: false },
     closedAt: { type: Date, default: null },
-    closedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null }
+    closedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    reopenedAt: { type: Date, default: null },
+    reopenedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null }
   },
   { timestamps: true }
 );

@@ -644,14 +644,16 @@ app.get("/api/groups/:groupId/audit", auth, async (req, res) => {
     const userId = req.user.userId;
     const { type, action } = req.query || {};
 
-    const validTypes = new Set(["expense", "settlement"]);
-    const validActions = new Set(["created", "deleted", "restored"]);
+    const validTypes = new Set(["expense", "settlement", "group"]);
+    const validActions = new Set(["created", "deleted", "restored", "closed", "reopened"]);
 
     if (type && !validTypes.has(String(type))) {
-      return res.status(400).json({ error: "Invalid type. Allowed: expense, settlement" });
+      return res.status(400).json({ error: "Invalid type. Allowed: expense, settlement, group" });
     }
     if (action && !validActions.has(String(action))) {
-      return res.status(400).json({ error: "Invalid action. Allowed: created, deleted, restored" });
+      return res
+        .status(400)
+        .json({ error: "Invalid action. Allowed: created, deleted, restored, closed, reopened" });
     }
 
     const rawLimit = Number(req.query.limit ?? 50);
@@ -689,6 +691,36 @@ app.get("/api/groups/:groupId/audit", auth, async (req, res) => {
     });
 
     const events = [];
+
+    events.push(
+      ...(group.closedAt
+        ? [
+            makeEvent({
+              at: group.closedAt,
+              type: "group",
+              action: "closed",
+              entityId: groupId,
+              actorUserId: group.closedByUserId,
+              meta: { name: group.name },
+            }),
+          ]
+        : [])
+    );
+
+    events.push(
+      ...(group.reopenedAt
+        ? [
+            makeEvent({
+              at: group.reopenedAt,
+              type: "group",
+              action: "reopened",
+              entityId: groupId,
+              actorUserId: group.reopenedByUserId,
+              meta: { name: group.name },
+            }),
+          ]
+        : [])
+    );
 
     for (const exp of expenses) {
       events.push(
@@ -823,14 +855,16 @@ app.get("/api/groups/:groupId/audit-detailed", auth, async (req, res) => {
     const userId = req.user.userId;
     const { type, action } = req.query || {};
 
-    const validTypes = new Set(["expense", "settlement"]);
-    const validActions = new Set(["created", "deleted", "restored"]);
+    const validTypes = new Set(["expense", "settlement", "group"]);
+    const validActions = new Set(["created", "deleted", "restored", "closed", "reopened"]);
 
     if (type && !validTypes.has(String(type))) {
-      return res.status(400).json({ error: "Invalid type. Allowed: expense, settlement" });
+      return res.status(400).json({ error: "Invalid type. Allowed: expense, settlement, group" });
     }
     if (action && !validActions.has(String(action))) {
-      return res.status(400).json({ error: "Invalid action. Allowed: created, deleted, restored" });
+      return res
+        .status(400)
+        .json({ error: "Invalid action. Allowed: created, deleted, restored, closed, reopened" });
     }
 
     const rawLimit = Number(req.query.limit ?? 50);
@@ -862,6 +896,9 @@ app.get("/api/groups/:groupId/audit-detailed", auth, async (req, res) => {
       if (id) userIds.add(String(id));
     };
 
+    collect(group.closedByUserId);
+    collect(group.reopenedByUserId);
+
     for (const exp of expenses) {
       collect(exp.paidByUserId);
       collect(exp.deletedByUserId);
@@ -887,6 +924,28 @@ app.get("/api/groups/:groupId/audit-detailed", auth, async (req, res) => {
     };
 
     const events = [];
+
+    if (group.closedAt) {
+      events.push({
+        at: group.closedAt,
+        type: "group",
+        action: "closed",
+        entityId: String(groupId),
+        actor: mapUser(group.closedByUserId),
+        meta: { name: group.name },
+      });
+    }
+
+    if (group.reopenedAt) {
+      events.push({
+        at: group.reopenedAt,
+        type: "group",
+        action: "reopened",
+        entityId: String(groupId),
+        actor: mapUser(group.reopenedByUserId),
+        meta: { name: group.name },
+      });
+    }
 
     for (const exp of expenses) {
       const baseMeta = {
@@ -995,14 +1054,16 @@ app.get("/api/groups/:groupId/timeline", auth, async (req, res) => {
     const userId = req.user.userId;
     const { type, action } = req.query || {};
 
-    const validTypes = new Set(["expense", "settlement"]);
-    const validActions = new Set(["created", "deleted", "restored"]);
+    const validTypes = new Set(["expense", "settlement", "group"]);
+    const validActions = new Set(["created", "deleted", "restored", "closed", "reopened"]);
 
     if (type && !validTypes.has(String(type))) {
-      return res.status(400).json({ error: "Invalid type. Allowed: expense, settlement" });
+      return res.status(400).json({ error: "Invalid type. Allowed: expense, settlement, group" });
     }
     if (action && !validActions.has(String(action))) {
-      return res.status(400).json({ error: "Invalid action. Allowed: created, deleted, restored" });
+      return res
+        .status(400)
+        .json({ error: "Invalid action. Allowed: created, deleted, restored, closed, reopened" });
     }
 
     const rawLimit = Number(req.query.limit ?? 50);
@@ -1034,6 +1095,9 @@ app.get("/api/groups/:groupId/timeline", auth, async (req, res) => {
       if (id) userIds.add(String(id));
     };
 
+    collect(group.closedByUserId);
+    collect(group.reopenedByUserId);
+
     for (const exp of expenses) {
       collect(exp.paidByUserId);
       collect(exp.deletedByUserId);
@@ -1059,6 +1123,30 @@ app.get("/api/groups/:groupId/timeline", auth, async (req, res) => {
     };
 
     const events = [];
+
+    if (group.closedAt) {
+      events.push({
+        at: group.closedAt,
+        entityId: String(groupId),
+        kind: "group_closed",
+        title: "Group closed",
+        subtitle: group.name,
+        actor: mapUser(group.closedByUserId),
+        payload: { name: group.name },
+      });
+    }
+
+    if (group.reopenedAt) {
+      events.push({
+        at: group.reopenedAt,
+        entityId: String(groupId),
+        kind: "group_reopened",
+        title: "Group reopened",
+        subtitle: group.name,
+        actor: mapUser(group.reopenedByUserId),
+        payload: { name: group.name },
+      });
+    }
 
     for (const exp of expenses) {
       const meta = {
