@@ -387,6 +387,17 @@ app.delete("/api/groups/:groupId/expenses/:expenseId", auth, async (req, res) =>
       });
     }
 
+    const hasActiveSettlements = await Settlement.exists({
+      groupId: expense.groupId,
+      isDeleted: { $ne: true },
+    });
+    if (hasActiveSettlements) {
+      return res.status(409).json({
+        error: "EXPENSE_DELETE_BLOCKED",
+        message: "Cannot delete expense because there are active settlements in this group.",
+      });
+    }
+
     expense.isDeleted = true;
     expense.deletedAt = new Date();
     expense.deletedByUserId = userId;
