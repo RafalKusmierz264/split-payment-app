@@ -763,6 +763,153 @@ app.get("/api/groups/:groupId/audit", auth, async (req, res) => {
   }
 });
 
+// --- AUDIT DETAILED ---
+app.get("/api/groups/:groupId/audit-detailed", auth, async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const userId = req.user.userId;
+
+    if (!validateObjectId(groupId)) {
+      return res.status(400).json({ error: "Invalid groupId" });
+    }
+
+    const group = await Group.findById(groupId);
+    if (!group) return res.status(404).json({ error: "Group not found" });
+
+    const isMember = group.memberIds.map(String).includes(String(userId));
+    if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
+
+    const includeDeleted = parseIncludeDeleted(req.query.includeDeleted);
+    const guard = assertGroupActive(group, userId, includeDeleted);
+    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
+
+    const [expenses, settlements] = await Promise.all([
+      Expense.find({ groupId }),
+      Settlement.find({ groupId }),
+    ]);
+
+    const userIds = new Set();
+    const collect = (id) => {
+      if (id) userIds.add(String(id));
+    };
+
+    for (const exp of expenses) {
+      collect(exp.paidByUserId);
+      collect(exp.deletedByUserId);
+      collect(exp.restoredByUserId);
+    }
+    for (const s of settlements) {
+      collect(s.createdByUserId);
+      collect(s.deletedByUserId);
+      collect(s.restoredByUserId);
+      collect(s.fromUserId);
+      collect(s.toUserId);
+    }
+
+    const users = await User.find({ _id: { $in: Array.from(userIds) } }).select("name email");
+    const userMap = {};
+    for (const u of users) {
+      userMap[String(u._id)] = { id: String(u._id), name: u.name, email: u.email };
+    }
+    const mapUser = (id) => {
+      if (!id) return null;
+      const key = String(id);
+      return userMap[key] || { id: key };
+    };
+
+    const events = [];
+
+    for (const exp of expenses) {
+      const baseMeta = {
+        title: exp.title,
+        amount: Number(exp.amount),
+        paidBy: mapUser(exp.paidByUserId),
+      };
+
+      events.push({
+        at: exp.createdAt,
+        type: "expense",
+        action: "created",
+        entityId: String(exp._id),
+        actor: mapUser(exp.paidByUserId),
+        meta: baseMeta,
+      });
+
+      if (exp.isDeleted && exp.deletedAt) {
+        events.push({
+          at: exp.deletedAt,
+          type: "expense",
+          action: "deleted",
+          entityId: String(exp._id),
+          actor: mapUser(exp.deletedByUserId),
+          meta: baseMeta,
+        });
+      }
+
+      if (exp.restoredAt) {
+        events.push({
+          at: exp.restoredAt,
+          type: "expense",
+          action: "restored",
+          entityId: String(exp._id),
+          actor: mapUser(exp.restoredByUserId),
+          meta: baseMeta,
+        });
+      }
+    }
+
+    for (const s of settlements) {
+      const baseMeta = {
+        from: mapUser(s.fromUserId),
+        to: mapUser(s.toUserId),
+        amount: Number(s.amount),
+        note: s.note || "",
+      };
+
+      events.push({
+        at: s.createdAt,
+        type: "settlement",
+        action: "created",
+        entityId: String(s._id),
+        actor: mapUser(s.createdByUserId),
+        meta: baseMeta,
+      });
+
+      if (s.isDeleted && s.deletedAt) {
+        events.push({
+          at: s.deletedAt,
+          type: "settlement",
+          action: "deleted",
+          entityId: String(s._id),
+          actor: mapUser(s.deletedByUserId),
+          meta: baseMeta,
+        });
+      }
+
+      if (s.restoredAt) {
+        events.push({
+          at: s.restoredAt,
+          type: "settlement",
+          action: "restored",
+          entityId: String(s._id),
+          actor: mapUser(s.restoredByUserId),
+          meta: baseMeta,
+        });
+      }
+    }
+
+    events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+
+    res.json({
+      groupId,
+      count: events.length,
+      events,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- SETTLEMENTS (settle up) ---
 // domyślnie: tylko aktywne
 // opcjonalnie: ?includeDeleted=true -> pokaż też usunięte
