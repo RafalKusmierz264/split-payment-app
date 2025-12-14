@@ -10,6 +10,7 @@ const Settlement = require("../models/Settlement");
 const AuditEvent = require("../models/AuditEvent");
 const { parseIncludeDeleted, assertGroupActive, assertGroupOpen } = require("../utils/groupHelpers");
 const { calculateGroupFinancials } = require("../utils/calculateGroupFinancials");
+const { sendError } = require("../utils/httpErrors");
 
 const router = express.Router();
 const validateObjectId = (id) => mongoose.Types.ObjectId.isValid(String(id));
@@ -66,7 +67,7 @@ router.post("/", async (req, res) => {
 
     res.status(201).json(group);
   } catch (err) {
-    res.status(400).json({ error: err.errors || err.message });
+    sendError(res, 400, "VALIDATION_ERROR", err.errors || err.message);
   }
 });
 
@@ -77,18 +78,18 @@ router.get("/:groupId", async (req, res) => {
     const userId = req.user.userId;
 
     if (!validateObjectId(groupId)) {
-      return res.status(400).json({ error: "Invalid groupId" });
+      return sendError(res, 400, "VALIDATION_ERROR", "Invalid groupId");
     }
 
     const group = await Group.findById(groupId);
-    if (!group) return res.status(404).json({ error: "Group not found" });
+    if (!group) return sendError(res, 404, "NOT_FOUND", "Group not found");
 
     const isMember = group.memberIds.map(String).includes(String(userId));
-    if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
+    if (!isMember) return sendError(res, 403, "FORBIDDEN", "Not a member of this group");
 
     const includeDeleted = parseIncludeDeleted(req.query.includeDeleted);
     const guard = assertGroupActive(group, userId, includeDeleted);
-    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
+    if (!guard.ok) return sendError(res, guard.status, guard.error || "CONFLICT", guard.error);
 
     const members = await User.find({ _id: { $in: group.memberIds } }).select("name email");
 
@@ -150,7 +151,7 @@ router.get("/:groupId", async (req, res) => {
       },
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, "SERVER_ERROR", err.message);
   }
 });
 
@@ -170,17 +171,17 @@ router.post("/:groupId/members", async (req, res) => {
     const { groupId } = req.params;
 
     const group = await Group.findById(groupId);
-    if (!group) return res.status(404).json({ error: "Group not found" });
+    if (!group) return sendError(res, 404, "NOT_FOUND", "Group not found");
 
     const guard = assertGroupActive(group, userId, false);
-    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
+    if (!guard.ok) return sendError(res, guard.status, guard.error || "CONFLICT", guard.error);
 
     // tylko członek grupy może dodawać
     const isMember = group.memberIds.map(String).includes(String(userId));
-    if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
+    if (!isMember) return sendError(res, 403, "FORBIDDEN", "Not a member of this group");
 
     const userToAdd = await User.findOne({ email: data.email.toLowerCase().trim() });
-    if (!userToAdd) return res.status(404).json({ error: "User not found" });
+    if (!userToAdd) return sendError(res, 404, "NOT_FOUND", "User not found");
 
     const already = group.memberIds.map(String).includes(String(userToAdd._id));
     if (!already) {
@@ -190,7 +191,7 @@ router.post("/:groupId/members", async (req, res) => {
 
     res.json(group);
   } catch (err) {
-    res.status(400).json({ error: err.errors || err.message });
+    sendError(res, 400, "VALIDATION_ERROR", err.errors || err.message);
   }
 });
 
@@ -201,10 +202,10 @@ router.delete("/:groupId", async (req, res) => {
     const userId = req.user.userId;
 
     const group = await Group.findById(groupId);
-    if (!group) return res.status(404).json({ error: "Group not found" });
+    if (!group) return sendError(res, 404, "NOT_FOUND", "Group not found");
 
     if (String(group.ownerId) !== String(userId)) {
-      return res.status(403).json({ error: "Only group owner can delete the group" });
+      return sendError(res, 403, "FORBIDDEN", "Only group owner can delete the group");
     }
 
     if (group.isDeleted) {
@@ -217,7 +218,7 @@ router.delete("/:groupId", async (req, res) => {
 
     res.json(group);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, "SERVER_ERROR", err.message);
   }
 });
 
@@ -228,10 +229,10 @@ router.post("/:groupId/restore", async (req, res) => {
     const userId = req.user.userId;
 
     const group = await Group.findById(groupId);
-    if (!group) return res.status(404).json({ error: "Group not found" });
+    if (!group) return sendError(res, 404, "NOT_FOUND", "Group not found");
 
     if (String(group.ownerId) !== String(userId)) {
-      return res.status(403).json({ error: "Only group owner can restore the group" });
+      return sendError(res, 403, "FORBIDDEN", "Only group owner can restore the group");
     }
 
     if (!group.isDeleted) {
@@ -244,7 +245,7 @@ router.post("/:groupId/restore", async (req, res) => {
 
     res.json(group);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, "SERVER_ERROR", err.message);
   }
 });
 
@@ -260,21 +261,21 @@ router.patch("/:groupId", async (req, res) => {
     const userId = req.user.userId;
 
     if (!validateObjectId(groupId)) {
-      return res.status(400).json({ error: "Invalid groupId" });
+      return sendError(res, 400, "VALIDATION_ERROR", "Invalid groupId");
     }
 
     const group = await Group.findById(groupId);
-    if (!group) return res.status(404).json({ error: "Group not found" });
+    if (!group) return sendError(res, 404, "NOT_FOUND", "Group not found");
 
     const guard = assertGroupActive(group, userId, false);
-    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
+    if (!guard.ok) return sendError(res, guard.status, guard.error || "CONFLICT", guard.error);
 
     const isMember = group.memberIds.map(String).includes(String(userId));
-    if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
+    if (!isMember) return sendError(res, 403, "FORBIDDEN", "Not a member of this group");
 
     const guardOpen = assertGroupOpen(group);
     if (!guardOpen.ok) {
-      return res.status(guardOpen.status).json({ error: guardOpen.error, message: guardOpen.message });
+      return sendError(res, guardOpen.status, guardOpen.error || "GROUP_CLOSED", guardOpen.message || "Group is closed.");
     }
 
     const oldName = group.name;
@@ -302,7 +303,7 @@ router.patch("/:groupId", async (req, res) => {
 
     res.json(group);
   } catch (err) {
-    res.status(400).json({ error: err.errors || err.message });
+    sendError(res, 400, "VALIDATION_ERROR", err.errors || err.message);
   }
 });
 
@@ -317,12 +318,15 @@ router.get("/:groupId/timeline", async (req, res) => {
     const validActions = new Set(["created", "deleted", "restored", "closed", "reopened", "updated"]);
 
     if (type && !validTypes.has(String(type))) {
-      return res.status(400).json({ error: "Invalid type. Allowed: expense, settlement, group" });
+      return sendError(res, 400, "VALIDATION_ERROR", "Invalid type. Allowed: expense, settlement, group");
     }
     if (action && !validActions.has(String(action))) {
-      return res
-        .status(400)
-        .json({ error: "Invalid action. Allowed: created, deleted, restored, closed, reopened" });
+      return sendError(
+        res,
+        400,
+        "VALIDATION_ERROR",
+        "Invalid action. Allowed: created, deleted, restored, closed, reopened"
+      );
     }
 
     const rawLimit = Number(req.query.limit ?? 50);
@@ -331,18 +335,18 @@ router.get("/:groupId/timeline", async (req, res) => {
     const beforeDate = beforeParam && !isNaN(beforeParam.getTime()) ? beforeParam : null;
 
     if (!validateObjectId(groupId)) {
-      return res.status(400).json({ error: "Invalid groupId" });
+      return sendError(res, 400, "VALIDATION_ERROR", "Invalid groupId");
     }
 
     const group = await Group.findById(groupId);
-    if (!group) return res.status(404).json({ error: "Group not found" });
+    if (!group) return sendError(res, 404, "NOT_FOUND", "Group not found");
 
     const isMember = group.memberIds.map(String).includes(String(userId));
-    if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
+    if (!isMember) return sendError(res, 403, "FORBIDDEN", "Not a member of this group");
 
     const includeDeleted = parseIncludeDeleted(req.query.includeDeleted);
     const guard = assertGroupActive(group, userId, includeDeleted);
-    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
+    if (!guard.ok) return sendError(res, guard.status, guard.error || "CONFLICT", guard.error);
 
     const [expenses, settlements] = await Promise.all([
       Expense.find({ groupId }),
