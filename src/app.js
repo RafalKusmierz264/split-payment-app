@@ -14,6 +14,7 @@ const User = require("./models/User");
 const Group = require("./models/Group");
 const Expense = require("./models/Expense");
 const Settlement = require("./models/Settlement");
+const AuditEvent = require("./models/AuditEvent");
 const { parseIncludeDeleted, assertGroupActive, assertGroupOpen } = require("./utils/groupHelpers");
 const { calculateGroupFinancials } = require("./utils/calculateGroupFinancials");
 
@@ -740,7 +741,7 @@ app.get("/api/groups/:groupId/audit", auth, async (req, res) => {
     const { type, action } = req.query || {};
 
     const validTypes = new Set(["expense", "settlement", "group"]);
-    const validActions = new Set(["created", "deleted", "restored", "closed", "reopened"]);
+    const validActions = new Set(["created", "deleted", "restored", "closed", "reopened", "updated"]);
 
     if (type && !validTypes.has(String(type))) {
       return res.status(400).json({ error: "Invalid type. Allowed: expense, settlement, group" });
@@ -770,9 +771,10 @@ app.get("/api/groups/:groupId/audit", auth, async (req, res) => {
     const guard = assertGroupActive(group, userId, includeDeleted);
     if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
 
-    const [expenses, settlements] = await Promise.all([
+    const [expenses, settlements, renameEvents] = await Promise.all([
       Expense.find({ groupId }),
       Settlement.find({ groupId }),
+      AuditEvent.find({ groupId, kind: "group_updated" }),
     ]);
 
     // spójna struktura eventów – frontend oczekuje kompletu pól niezależnie od filtrów/paginacji
@@ -816,6 +818,19 @@ app.get("/api/groups/:groupId/audit", auth, async (req, res) => {
           ]
         : [])
     );
+
+    for (const ev of renameEvents) {
+      events.push(
+        makeEvent({
+          at: ev.at || ev.createdAt,
+          type: "group",
+          action: "updated",
+          entityId: groupId,
+          actorUserId: ev.actorUserId,
+          meta: ev.payload || {},
+        })
+      );
+    }
 
     for (const exp of expenses) {
       events.push(
@@ -1019,7 +1034,7 @@ app.get("/api/groups/:groupId/audit-detailed", auth, async (req, res) => {
     const { type, action } = req.query || {};
 
     const validTypes = new Set(["expense", "settlement", "group"]);
-    const validActions = new Set(["created", "deleted", "restored", "closed", "reopened"]);
+    const validActions = new Set(["created", "deleted", "restored", "closed", "reopened", "updated"]);
 
     if (type && !validTypes.has(String(type))) {
       return res.status(400).json({ error: "Invalid type. Allowed: expense, settlement, group" });

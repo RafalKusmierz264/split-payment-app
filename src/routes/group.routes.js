@@ -7,7 +7,8 @@ const Group = require("../models/Group");
 const User = require("../models/User");
 const Expense = require("../models/Expense");
 const Settlement = require("../models/Settlement");
-const { parseIncludeDeleted, assertGroupActive } = require("../utils/groupHelpers");
+const AuditEvent = require("../models/AuditEvent");
+const { parseIncludeDeleted, assertGroupActive, assertGroupOpen } = require("../utils/groupHelpers");
 
 const router = express.Router();
 const validateObjectId = (id) => mongoose.Types.ObjectId.isValid(String(id));
@@ -162,6 +163,64 @@ router.post("/:groupId/restore", async (req, res) => {
   }
 });
 
+// --- GROUP UPDATE (rename) ---
+router.patch("/:groupId", async (req, res) => {
+  try {
+    const schema = z.object({
+      name: z.string().trim().min(2),
+    });
+
+    const data = schema.parse(req.body);
+    const { groupId } = req.params;
+    const userId = req.user.userId;
+
+    if (!validateObjectId(groupId)) {
+      return res.status(400).json({ error: "Invalid groupId" });
+    }
+
+    const group = await Group.findById(groupId);
+    if (!group) return res.status(404).json({ error: "Group not found" });
+
+    const guard = assertGroupActive(group, userId, false);
+    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
+
+    const isMember = group.memberIds.map(String).includes(String(userId));
+    if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
+
+    const guardOpen = assertGroupOpen(group);
+    if (!guardOpen.ok) {
+      return res.status(guardOpen.status).json({ error: guardOpen.error, message: guardOpen.message });
+    }
+
+    const oldName = group.name;
+    const newName = data.name.trim();
+
+    if (oldName === newName) {
+      return res.json(group);
+    }
+
+    group.name = newName;
+    await group.save();
+
+    await AuditEvent.create({
+      groupId,
+      kind: "group_updated",
+      entityId: groupId,
+      entityType: "group",
+      actorUserId: userId,
+      payload: {
+        before: { name: oldName },
+        after: { name: newName },
+      },
+      at: new Date(),
+    });
+
+    res.json(group);
+  } catch (err) {
+    res.status(400).json({ error: err.errors || err.message });
+  }
+});
+
 // --- TIMELINE ---
 router.get("/:groupId/timeline", async (req, res) => {
   try {
@@ -170,7 +229,7 @@ router.get("/:groupId/timeline", async (req, res) => {
     const { type, action } = req.query || {};
 
     const validTypes = new Set(["expense", "settlement", "group"]);
-    const validActions = new Set(["created", "deleted", "restored", "closed", "reopened"]);
+    const validActions = new Set(["created", "deleted", "restored", "closed", "reopened", "updated"]);
 
     if (type && !validTypes.has(String(type))) {
       return res.status(400).json({ error: "Invalid type. Allowed: expense, settlement, group" });
@@ -207,6 +266,8 @@ router.get("/:groupId/timeline", async (req, res) => {
 
     const events = [];
 
+    const auditRenameEvents = await AuditEvent.find({ groupId, kind: "group_updated" }).sort({ at: -1 });
+
     if (group.closedAt) {
       events.push({
         at: group.closedAt,
@@ -229,6 +290,19 @@ router.get("/:groupId/timeline", async (req, res) => {
         subtitle: group.name,
         actorUserId: group.reopenedByUserId ? String(group.reopenedByUserId) : null,
         payload: { name: group.name },
+        groupId: String(groupId),
+      });
+    }
+
+    for (const ev of auditRenameEvents) {
+      events.push({
+        at: ev.at || ev.createdAt,
+        entityId: String(ev.entityId || groupId),
+        kind: "group_updated",
+        title: "Group renamed",
+        subtitle: group.name,
+        actorUserId: ev.actorUserId ? String(ev.actorUserId) : null,
+        payload: ev.payload || {},
         groupId: String(groupId),
       });
     }
