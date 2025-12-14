@@ -31,7 +31,12 @@ router.get("/", async (req, res) => {
     ? groups.filter((g) => !g.isDeleted || String(g.ownerId) === String(userId))
     : groups;
 
-  res.json(filtered);
+  const withClosedFlag = filtered.map((g) => ({
+    ...g.toObject(),
+    isClosed: Boolean(g.closedAt)
+  }));
+
+  res.json(withClosedFlag);
 });
 
 /**
