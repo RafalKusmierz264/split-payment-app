@@ -454,6 +454,8 @@ app.post("/api/groups/:groupId/expenses/:expenseId/restore", auth, async (req, r
     expense.isDeleted = false;
     expense.deletedAt = null;
     expense.deletedByUserId = null;
+    expense.restoredAt = new Date();
+    expense.restoredByUserId = userId;
     await expense.save();
 
     res.json({ ok: true, restoredExpenseId: String(expenseId) });
@@ -623,6 +625,138 @@ app.get("/api/groups/:groupId/summary", auth, async (req, res) => {
       balanceDetailed,
       transfersDetailed,
       settlementsDetailed,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- AUDIT ---
+app.get("/api/groups/:groupId/audit", auth, async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const userId = req.user.userId;
+
+    if (!validateObjectId(groupId)) {
+      return res.status(400).json({ error: "Invalid groupId" });
+    }
+
+    const group = await Group.findById(groupId);
+    if (!group) return res.status(404).json({ error: "Group not found" });
+
+    const isMember = group.memberIds.map(String).includes(String(userId));
+    if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
+
+    const includeDeleted = parseIncludeDeleted(req.query.includeDeleted);
+    const guard = assertGroupActive(group, userId, includeDeleted);
+    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
+
+    const [expenses, settlements] = await Promise.all([
+      Expense.find({ groupId }),
+      Settlement.find({ groupId }),
+    ]);
+
+    const events = [];
+
+    for (const exp of expenses) {
+      events.push({
+        at: exp.createdAt,
+        type: "expense",
+        action: "created",
+        entityId: String(exp._id),
+        actorUserId: exp.paidByUserId ? String(exp.paidByUserId) : null,
+        meta: {
+          title: exp.title,
+          amount: Number(exp.amount),
+          paidByUserId: exp.paidByUserId ? String(exp.paidByUserId) : null,
+        },
+      });
+
+      if (exp.isDeleted && exp.deletedAt) {
+        events.push({
+          at: exp.deletedAt,
+          type: "expense",
+          action: "deleted",
+          entityId: String(exp._id),
+          actorUserId: exp.deletedByUserId ? String(exp.deletedByUserId) : null,
+          meta: {
+            title: exp.title,
+            amount: Number(exp.amount),
+            paidByUserId: exp.paidByUserId ? String(exp.paidByUserId) : null,
+          },
+        });
+      }
+
+      if (exp.restoredAt) {
+        events.push({
+          at: exp.restoredAt,
+          type: "expense",
+          action: "restored",
+          entityId: String(exp._id),
+          actorUserId: exp.restoredByUserId ? String(exp.restoredByUserId) : null,
+          meta: {
+            title: exp.title,
+            amount: Number(exp.amount),
+            paidByUserId: exp.paidByUserId ? String(exp.paidByUserId) : null,
+          },
+        });
+      }
+    }
+
+    for (const s of settlements) {
+      events.push({
+        at: s.createdAt,
+        type: "settlement",
+        action: "created",
+        entityId: String(s._id),
+        actorUserId: s.createdByUserId ? String(s.createdByUserId) : null,
+        meta: {
+          fromUserId: s.fromUserId ? String(s.fromUserId) : null,
+          toUserId: s.toUserId ? String(s.toUserId) : null,
+          amount: Number(s.amount),
+          note: s.note || "",
+        },
+      });
+
+      if (s.isDeleted && s.deletedAt) {
+        events.push({
+          at: s.deletedAt,
+          type: "settlement",
+          action: "deleted",
+          entityId: String(s._id),
+          actorUserId: s.deletedByUserId ? String(s.deletedByUserId) : null,
+          meta: {
+            fromUserId: s.fromUserId ? String(s.fromUserId) : null,
+            toUserId: s.toUserId ? String(s.toUserId) : null,
+            amount: Number(s.amount),
+            note: s.note || "",
+          },
+        });
+      }
+
+      if (s.restoredAt) {
+        events.push({
+          at: s.restoredAt,
+          type: "settlement",
+          action: "restored",
+          entityId: String(s._id),
+          actorUserId: s.restoredByUserId ? String(s.restoredByUserId) : null,
+          meta: {
+            fromUserId: s.fromUserId ? String(s.fromUserId) : null,
+            toUserId: s.toUserId ? String(s.toUserId) : null,
+            amount: Number(s.amount),
+            note: s.note || "",
+          },
+        });
+      }
+    }
+
+    events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+
+    res.json({
+      groupId,
+      count: events.length,
+      events,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -948,6 +1082,8 @@ app.post("/api/groups/:groupId/settlements/:settlementId/restore", auth, async (
     settlement.isDeleted = false;
     settlement.deletedAt = null;
     settlement.deletedByUserId = null;
+    settlement.restoredAt = new Date();
+    settlement.restoredByUserId = userId;
     await settlement.save();
 
     res.json({

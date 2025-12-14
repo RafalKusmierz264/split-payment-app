@@ -13,9 +13,10 @@ const SettlementSchema = new mongoose.Schema(
     isDeleted: { type: Boolean, default: false, index: true },
     deletedAt: { type: Date, default: null },
     deletedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    restoredAt: { type: Date, default: null },
+    restoredByUserId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   },
   { timestamps: true }
 );
 
 module.exports = mongoose.model("Settlement", SettlementSchema);
-
