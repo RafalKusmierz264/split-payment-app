@@ -16,6 +16,7 @@ const User = require("./models/User");
 const Group = require("./models/Group");
 const Expense = require("./models/Expense");
 const Settlement = require("./models/Settlement");
+const { parseIncludeDeleted, assertGroupActive } = require("./utils/groupHelpers");
 
 const groupRoutes = require("./routes/group.routes");
 
@@ -226,6 +227,9 @@ app.post("/api/groups/:groupId/members", auth, async (req, res) => {
     const isMember = group.memberIds.map(String).includes(String(userId));
     if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
 
+    const guard = assertGroupActive(group, userId, false);
+    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
+
     const userToAdd = await User.findOne({ email: String(email).toLowerCase().trim() });
     if (!userToAdd) return res.status(404).json({ error: "User not found" });
 
@@ -261,6 +265,9 @@ app.post("/api/groups/:groupId/expenses", auth, async (req, res) => {
 
     const isMember = group.memberIds.map(String).includes(String(userId));
     if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
+
+    const guard = assertGroupActive(group, userId, false);
+    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
 
     const participants =
       Array.isArray(participantIds) && participantIds.length > 0
@@ -324,7 +331,10 @@ app.get("/api/groups/:groupId/expenses", auth, async (req, res) => {
     const isMember = group.memberIds.map(String).includes(String(userId));
     if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
 
-    const includeDeleted = String(req.query.includeDeleted || "false").toLowerCase() === "true";
+    const includeDeleted = parseIncludeDeleted(req.query.includeDeleted);
+
+    const guard = assertGroupActive(group, userId, includeDeleted);
+    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
     const query = includeDeleted ? { groupId } : activeExpensesQuery(groupId);
 
     const expenses = await Expense.find(query).sort({ createdAt: -1 });
@@ -349,6 +359,9 @@ app.delete("/api/groups/:groupId/expenses/:expenseId", auth, async (req, res) =>
 
     const isMember = group.memberIds.map(String).includes(String(userId));
     if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
+
+    const guard = assertGroupActive(group, userId, false);
+    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
 
     const expense = await Expense.findById(expenseId);
     if (!expense) return res.status(404).json({ error: "Expense not found" });
@@ -405,6 +418,9 @@ app.post("/api/groups/:groupId/expenses/:expenseId/restore", auth, async (req, r
     const isMember = group.memberIds.map(String).includes(String(userId));
     if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
 
+    const guard = assertGroupActive(group, userId, false);
+    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
+
     const expense = await Expense.findById(expenseId);
     if (!expense) return res.status(404).json({ error: "Expense not found" });
 
@@ -451,6 +467,10 @@ app.get("/api/groups/:groupId/balance", auth, async (req, res) => {
     const isMember = group.memberIds.map(String).includes(String(userId));
     if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
 
+    const includeDeleted = parseIncludeDeleted(req.query.includeDeleted);
+    const guard = assertGroupActive(group, userId, includeDeleted);
+    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
+
     const expenses = await Expense.find(activeExpensesQuery(groupId));
     const settlements = await Settlement.find(activeSettlementsQuery(groupId));
 
@@ -488,6 +508,10 @@ app.get("/api/groups/:groupId/transfers", auth, async (req, res) => {
 
     const isMember = group.memberIds.map(String).includes(String(userId));
     if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
+
+    const includeDeleted = parseIncludeDeleted(req.query.includeDeleted);
+    const guard = assertGroupActive(group, userId, includeDeleted);
+    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
 
     const expenses = await Expense.find(activeExpensesQuery(groupId));
     const settlements = await Settlement.find(activeSettlementsQuery(groupId));
@@ -528,6 +552,10 @@ app.get("/api/groups/:groupId/transfers-detailed", auth, async (req, res) => {
 
     const isMember = group.memberIds.map(String).includes(String(userId));
     if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
+
+    const includeDeleted = parseIncludeDeleted(req.query.includeDeleted);
+    const guard = assertGroupActive(group, userId, includeDeleted);
+    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
 
     const expenses = await Expense.find(activeExpensesQuery(groupId));
     const settlements = await Settlement.find(activeSettlementsQuery(groupId));
@@ -581,6 +609,10 @@ app.get("/api/groups/:groupId/summary", auth, async (req, res) => {
 
     const isMember = group.memberIds.map(String).includes(String(userId));
     if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
+
+    const includeDeleted = parseIncludeDeleted(req.query.includeDeleted);
+    const guard = assertGroupActive(group, userId, includeDeleted);
+    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
 
     const [expenses, settlements, memberUsers] = await Promise.all([
       Expense.find(activeExpensesQuery(groupId)).sort({ createdAt: -1 }),
@@ -670,7 +702,9 @@ app.get("/api/groups/:groupId/settlements", auth, async (req, res) => {
     const isMember = group.memberIds.map(String).includes(String(userId));
     if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
 
-    const includeDeleted = String(req.query.includeDeleted || "false").toLowerCase() === "true";
+    const includeDeleted = parseIncludeDeleted(req.query.includeDeleted);
+    const guard = assertGroupActive(group, userId, includeDeleted);
+    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
     const query = includeDeleted ? { groupId } : activeSettlementsQuery(groupId);
 
     const settlements = await Settlement.find(query).sort({ createdAt: -1 });
@@ -695,6 +729,10 @@ app.get("/api/groups/:groupId/settlements/history", auth, async (req, res) => {
 
     const isMember = group.memberIds.map(String).includes(String(userId));
     if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
+
+    const includeDeleted = parseIncludeDeleted(req.query.includeDeleted);
+    const guard = assertGroupActive(group, userId, includeDeleted);
+    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
 
     const memberIds = group.memberIds.map(String);
 
@@ -778,6 +816,9 @@ app.post("/api/groups/:groupId/settlements", auth, async (req, res) => {
     const isMember = group.memberIds.map(String).includes(String(createdByUserId));
     if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
 
+    const guard = assertGroupActive(group, createdByUserId, false);
+    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
+
     const memberSet = new Set(group.memberIds.map(String));
     if (!memberSet.has(String(fromUserId)) || !memberSet.has(String(toUserId))) {
       return res.status(400).json({ error: "fromUserId/toUserId must be members of this group" });
@@ -849,6 +890,9 @@ app.post("/api/groups/:groupId/settle-all", auth, async (req, res) => {
     const isMember = group.memberIds.map(String).includes(String(userId));
     if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
 
+    const guard = assertGroupActive(group, userId, false);
+    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
+
     const note = String((req.body && req.body.note) || "Settle all").trim();
 
     const expenses = await Expense.find(activeExpensesQuery(groupId));
@@ -919,6 +963,9 @@ app.delete("/api/groups/:groupId/settlements/:settlementId", auth, async (req, r
     const isMember = group.memberIds.map(String).includes(String(userId));
     if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
 
+    const guard = assertGroupActive(group, userId, false);
+    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
+
     const settlement = await Settlement.findById(settlementId);
     if (!settlement) return res.status(404).json({ error: "Settlement not found" });
 
@@ -971,6 +1018,9 @@ app.post("/api/groups/:groupId/settlements/:settlementId/restore", auth, async (
 
     const isMember = group.memberIds.map(String).includes(String(userId));
     if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
+
+    const guard = assertGroupActive(group, userId, false);
+    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
 
     const settlement = await Settlement.findById(settlementId);
     if (!settlement) return res.status(404).json({ error: "Settlement not found" });
