@@ -9,6 +9,7 @@ const Expense = require("../models/Expense");
 const Settlement = require("../models/Settlement");
 const AuditEvent = require("../models/AuditEvent");
 const { parseIncludeDeleted, assertGroupActive, assertGroupOpen } = require("../utils/groupHelpers");
+const { calculateGroupFinancials } = require("../utils/calculateGroupFinancials");
 
 const router = express.Router();
 const validateObjectId = (id) => mongoose.Types.ObjectId.isValid(String(id));
@@ -66,6 +67,90 @@ router.post("/", async (req, res) => {
     res.status(201).json(group);
   } catch (err) {
     res.status(400).json({ error: err.errors || err.message });
+  }
+});
+
+// --- GROUP DETAILS + FINANCIALS ---
+router.get("/:groupId", async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const userId = req.user.userId;
+
+    if (!validateObjectId(groupId)) {
+      return res.status(400).json({ error: "Invalid groupId" });
+    }
+
+    const group = await Group.findById(groupId);
+    if (!group) return res.status(404).json({ error: "Group not found" });
+
+    const isMember = group.memberIds.map(String).includes(String(userId));
+    if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
+
+    const includeDeleted = parseIncludeDeleted(req.query.includeDeleted);
+    const guard = assertGroupActive(group, userId, includeDeleted);
+    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
+
+    const members = await User.find({ _id: { $in: group.memberIds } }).select("name email");
+
+    const { balanceMap, transfers, settlements, group: calcGroup } = await calculateGroupFinancials({
+      groupId,
+      includeDeleted,
+    });
+
+    const groupForMembers = calcGroup || group;
+    const membersLookup = members.reduce((acc, m) => {
+      acc[String(m._id)] = { id: String(m._id), name: m.name, email: m.email };
+      return acc;
+    }, {});
+
+    const balanceDetailed = groupForMembers.memberIds.map((mid) => {
+      const id = String(mid);
+      return {
+        user: membersLookup[id] ?? { id },
+        balance: balanceMap[id] ?? 0,
+      };
+    });
+
+    const transfersDetailed = transfers.map((t) => ({
+      from: membersLookup[String(t.fromUserId)] ?? { id: String(t.fromUserId) },
+      to: membersLookup[String(t.toUserId)] ?? { id: String(t.toUserId) },
+      amount: t.amount,
+    }));
+
+    const settlementsDetailed = settlements.map((s) => ({
+      id: String(s._id),
+      groupId: String(s.groupId),
+      from: membersLookup[String(s.fromUserId)] ?? { id: String(s.fromUserId) },
+      to: membersLookup[String(s.toUserId)] ?? { id: String(s.toUserId) },
+      amount: Number(s.amount),
+      note: s.note || "",
+      createdBy: membersLookup[String(s.createdByUserId)] ?? { id: String(s.createdByUserId) },
+      createdAt: s.createdAt,
+    }));
+
+    res.json({
+      group: {
+        ...group.toObject(),
+        id: String(group._id),
+        isClosed: Boolean(group.closedAt),
+      },
+      members: members.map((m) => ({
+        id: String(m._id),
+        name: m.name,
+        email: m.email,
+      })),
+      financials: {
+        balances: balanceMap,
+        summary: {
+          balanceDetailed,
+          transfersDetailed,
+          settlementsDetailed,
+        },
+        transfers,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
