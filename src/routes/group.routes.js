@@ -329,10 +329,20 @@ router.get("/:groupId/timeline", async (req, res) => {
       );
     }
 
-    const rawLimit = Number(req.query.limit ?? 50);
-    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 200) : 50;
-    const beforeParam = req.query.before ? new Date(req.query.before) : null;
-    const beforeDate = beforeParam && !isNaN(beforeParam.getTime()) ? beforeParam : null;
+    const rawLimit = Number(req.query.limit ?? 20);
+    if (!Number.isFinite(rawLimit) || rawLimit <= 0) {
+      return sendError(res, 400, "VALIDATION_ERROR", "Invalid limit");
+    }
+    const limit = Math.min(Math.max(rawLimit, 1), 50);
+
+    let beforeDate = null;
+    if (req.query.before != null) {
+      const beforeParsed = new Date(req.query.before);
+      if (isNaN(beforeParsed.getTime())) {
+        return sendError(res, 400, "VALIDATION_ERROR", "Invalid before cursor");
+      }
+      beforeDate = beforeParsed;
+    }
 
     if (!validateObjectId(groupId)) {
       return sendError(res, 400, "VALIDATION_ERROR", "Invalid groupId");
@@ -496,11 +506,6 @@ router.get("/:groupId/timeline", async (req, res) => {
 
     events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
 
-    let filtered = events;
-    if (type) filtered = filtered.filter((e) => e.kind.startsWith(type));
-    if (action) filtered = filtered.filter((e) => e.kind.endsWith(action));
-    if (beforeDate) filtered = filtered.filter((e) => new Date(e.at).getTime() < beforeDate.getTime());
-
     const normalizeTimelineItem = (raw) => {
       const base = raw && typeof raw === "object" ? raw : {};
       const kind = String(base.kind || `${base.type || "unknown"}_${base.action || "event"}`);
@@ -571,13 +576,21 @@ router.get("/:groupId/timeline", async (req, res) => {
       return result;
     };
 
-    const normalizedEvents = (filtered || []).filter(Boolean).slice(0, limit).map(normalizeTimelineItem);
-    const nextBefore = normalizedEvents.length > 0 ? normalizedEvents[normalizedEvents.length - 1].at : null;
+    const normalizedEvents = (events || []).filter(Boolean).map(normalizeTimelineItem);
+
+    let filtered = normalizedEvents;
+    if (type) filtered = filtered.filter((e) => e.kind.startsWith(type));
+    if (action) filtered = filtered.filter((e) => e.kind.endsWith(action));
+    if (beforeDate) filtered = filtered.filter((e) => new Date(e.at).getTime() < beforeDate.getTime());
+
+    const hasMore = filtered.length > limit;
+    const page = filtered.slice(0, limit);
+    const nextBefore = hasMore && page.length > 0 ? page[page.length - 1].at : null;
 
     res.json({
       groupId: String(groupId),
-      count: normalizedEvents.length,
-      events: normalizedEvents,
+      count: page.length,
+      events: page,
       nextBefore,
     });
   } catch (err) {
