@@ -17,6 +17,7 @@ const Group = require("./models/Group");
 const Expense = require("./models/Expense");
 const Settlement = require("./models/Settlement");
 const { parseIncludeDeleted, assertGroupActive } = require("./utils/groupHelpers");
+const { calculateGroupFinancials } = require("./utils/calculateGroupFinancials");
 
 const groupRoutes = require("./routes/group.routes");
 
@@ -482,26 +483,9 @@ app.get("/api/groups/:groupId/balance", auth, async (req, res) => {
     const guard = assertGroupActive(group, userId, includeDeleted);
     if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
 
-    const expenses = await Expense.find(activeExpensesQuery(groupId));
-    const settlements = await Settlement.find(activeSettlementsQuery(groupId));
+    const { balanceMap } = await calculateGroupFinancials({ groupId, includeDeleted });
 
-    const balance = {};
-    for (const memberId of group.memberIds.map(String)) balance[memberId] = 0;
-
-    for (const exp of expenses) {
-      const payer = String(exp.paidByUserId);
-      balance[payer] = (balance[payer] ?? 0) + Number(exp.amount);
-
-      for (const s of exp.splits) {
-        const uid = String(s.userId);
-        balance[uid] = (balance[uid] ?? 0) - Number(s.share);
-      }
-    }
-
-    applySettlementsToBalance(balance, settlements);
-    for (const k of Object.keys(balance)) balance[k] = round2(balance[k]);
-
-    res.json({ groupId, balance });
+    res.json({ groupId, balance: balanceMap });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -524,28 +508,9 @@ app.get("/api/groups/:groupId/transfers", auth, async (req, res) => {
     const guard = assertGroupActive(group, userId, includeDeleted);
     if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
 
-    const expenses = await Expense.find(activeExpensesQuery(groupId));
-    const settlements = await Settlement.find(activeSettlementsQuery(groupId));
+    const { balanceMap, transfers } = await calculateGroupFinancials({ groupId, includeDeleted });
 
-    const balance = {};
-    for (const memberId of group.memberIds.map(String)) balance[memberId] = 0;
-
-    for (const exp of expenses) {
-      const payer = String(exp.paidByUserId);
-      balance[payer] = (balance[payer] ?? 0) + Number(exp.amount);
-
-      for (const s of exp.splits) {
-        const uid = String(s.userId);
-        balance[uid] = (balance[uid] ?? 0) - Number(s.share);
-      }
-    }
-
-    applySettlementsToBalance(balance, settlements);
-    for (const k of Object.keys(balance)) balance[k] = round2(balance[k]);
-
-    const transfers = calculateTransfers(balance);
-
-    res.json({ groupId, transfers, balance });
+    res.json({ groupId, transfers, balance: balanceMap });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -568,28 +533,10 @@ app.get("/api/groups/:groupId/transfers-detailed", auth, async (req, res) => {
     const guard = assertGroupActive(group, userId, includeDeleted);
     if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
 
-    const expenses = await Expense.find(activeExpensesQuery(groupId));
-    const settlements = await Settlement.find(activeSettlementsQuery(groupId));
+    const { transfers, group: calcGroup } = await calculateGroupFinancials({ groupId, includeDeleted });
+    const groupForMembers = calcGroup || group;
 
-    const balance = {};
-    for (const memberId of group.memberIds.map(String)) balance[memberId] = 0;
-
-    for (const exp of expenses) {
-      const payer = String(exp.paidByUserId);
-      balance[payer] = (balance[payer] ?? 0) + Number(exp.amount);
-
-      for (const s of exp.splits) {
-        const uid = String(s.userId);
-        balance[uid] = (balance[uid] ?? 0) - Number(s.share);
-      }
-    }
-
-    applySettlementsToBalance(balance, settlements);
-    for (const k of Object.keys(balance)) balance[k] = round2(balance[k]);
-
-    const transfers = calculateTransfers(balance);
-
-    const memberUsers = await User.find({ _id: { $in: group.memberIds } }).select("name email");
+    const memberUsers = await User.find({ _id: { $in: groupForMembers.memberIds } }).select("name email");
     const byId = {};
     for (const u of memberUsers) byId[String(u._id)] = { id: String(u._id), name: u.name, email: u.email };
 
@@ -625,34 +572,19 @@ app.get("/api/groups/:groupId/summary", auth, async (req, res) => {
     const guard = assertGroupActive(group, userId, includeDeleted);
     if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
 
-    const [expenses, settlements, memberUsers] = await Promise.all([
-      Expense.find(activeExpensesQuery(groupId)).sort({ createdAt: -1 }),
-      Settlement.find(activeSettlementsQuery(groupId)).sort({ createdAt: -1 }),
-      User.find({ _id: { $in: group.memberIds } }).select("name email"),
-    ]);
+    const { settlements, balanceMap, transfers, group: calcGroup } = await calculateGroupFinancials({
+      groupId,
+      includeDeleted,
+    });
+
+    const groupForMembers = calcGroup || group;
+    const memberUsers = await User.find({ _id: { $in: groupForMembers.memberIds } }).select("name email");
 
     const byId = {};
     for (const u of memberUsers) {
       byId[String(u._id)] = { id: String(u._id), name: u.name, email: u.email };
     }
 
-    const balance = {};
-    for (const memberId of group.memberIds.map(String)) balance[memberId] = 0;
-
-    for (const exp of expenses) {
-      const payer = String(exp.paidByUserId);
-      balance[payer] = (balance[payer] ?? 0) + Number(exp.amount);
-
-      for (const sp of exp.splits) {
-        const uid = String(sp.userId);
-        balance[uid] = (balance[uid] ?? 0) - Number(sp.share);
-      }
-    }
-
-    applySettlementsToBalance(balance, settlements);
-    for (const k of Object.keys(balance)) balance[k] = round2(balance[k]);
-
-    const transfers = calculateTransfers(balance);
     const transfersDetailed = transfers.map((t) => ({
       from: byId[String(t.fromUserId)] ?? { id: String(t.fromUserId) },
       to: byId[String(t.toUserId)] ?? { id: String(t.toUserId) },
@@ -663,7 +595,7 @@ app.get("/api/groups/:groupId/summary", auth, async (req, res) => {
       const id = String(mid);
       return {
         user: byId[id] ?? { id },
-        balance: balance[id] ?? 0,
+        balance: balanceMap[id] ?? 0,
       };
     });
 
@@ -836,26 +768,7 @@ app.post("/api/groups/:groupId/settlements", auth, async (req, res) => {
     }
 
     // --- LIMIT: nie pozwól rozliczyć więcej niż aktualnie jest do zapłaty ---
-    const expenses = await Expense.find(activeExpensesQuery(groupId));
-    const settlements = await Settlement.find(activeSettlementsQuery(groupId));
-
-    const balance = {};
-    for (const memberId of group.memberIds.map(String)) balance[memberId] = 0;
-
-    for (const exp of expenses) {
-      const payer = String(exp.paidByUserId);
-      balance[payer] = (balance[payer] ?? 0) + Number(exp.amount);
-
-      for (const sp of exp.splits) {
-        const uid = String(sp.userId);
-        balance[uid] = (balance[uid] ?? 0) - Number(sp.share);
-      }
-    }
-
-    applySettlementsToBalance(balance, settlements);
-    for (const k of Object.keys(balance)) balance[k] = round2(balance[k]);
-
-    const transfersNow = calculateTransfers(balance);
+    const { transfers: transfersNow } = await calculateGroupFinancials({ groupId, includeDeleted: false });
     const owed = getOwedAmount(transfersNow, fromUserId, toUserId);
 
     if (owed <= 0) {
@@ -906,26 +819,7 @@ app.post("/api/groups/:groupId/settle-all", auth, async (req, res) => {
 
     const note = String((req.body && req.body.note) || "Settle all").trim();
 
-    const expenses = await Expense.find(activeExpensesQuery(groupId));
-    const settlements = await Settlement.find(activeSettlementsQuery(groupId));
-
-    const balance = {};
-    for (const memberId of group.memberIds.map(String)) balance[memberId] = 0;
-
-    for (const exp of expenses) {
-      const payer = String(exp.paidByUserId);
-      balance[payer] = (balance[payer] ?? 0) + Number(exp.amount);
-
-      for (const sp of exp.splits) {
-        const uid = String(sp.userId);
-        balance[uid] = (balance[uid] ?? 0) - Number(sp.share);
-      }
-    }
-
-    applySettlementsToBalance(balance, settlements);
-    for (const k of Object.keys(balance)) balance[k] = round2(balance[k]);
-
-    const transfersNow = calculateTransfers(balance);
+    const { transfers: transfersNow } = await calculateGroupFinancials({ groupId, includeDeleted: false });
 
     if (transfersNow.length === 0) {
       return res.json({
