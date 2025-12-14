@@ -16,7 +16,7 @@ const User = require("./models/User");
 const Group = require("./models/Group");
 const Expense = require("./models/Expense");
 const Settlement = require("./models/Settlement");
-const { parseIncludeDeleted, assertGroupActive } = require("./utils/groupHelpers");
+const { parseIncludeDeleted, assertGroupActive, assertGroupOpen } = require("./utils/groupHelpers");
 const { calculateGroupFinancials } = require("./utils/calculateGroupFinancials");
 
 const groupRoutes = require("./routes/group.routes");
@@ -269,6 +269,8 @@ app.post("/api/groups/:groupId/expenses", auth, async (req, res) => {
 
     const guard = assertGroupActive(group, userId, false);
     if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
+    const guardOpen = assertGroupOpen(group);
+    if (!guardOpen.ok) return res.status(guardOpen.status).json({ error: guardOpen.error, message: guardOpen.message });
 
     const participants =
       Array.isArray(participantIds) && participantIds.length > 0
@@ -363,6 +365,8 @@ app.delete("/api/groups/:groupId/expenses/:expenseId", auth, async (req, res) =>
 
     const guard = assertGroupActive(group, userId, false);
     if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
+    const guardOpen = assertGroupOpen(group);
+    if (!guardOpen.ok) return res.status(guardOpen.status).json({ error: guardOpen.error, message: guardOpen.message });
 
     const expense = await Expense.findById(expenseId);
     if (!expense) return res.status(404).json({ error: "Expense not found" });
@@ -432,6 +436,8 @@ app.post("/api/groups/:groupId/expenses/:expenseId/restore", auth, async (req, r
 
     const guard = assertGroupActive(group, userId, false);
     if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
+    const guardOpen = assertGroupOpen(group);
+    if (!guardOpen.ok) return res.status(guardOpen.status).json({ error: guardOpen.error, message: guardOpen.message });
 
     const expense = await Expense.findById(expenseId);
     if (!expense) return res.status(404).json({ error: "Expense not found" });
@@ -1293,6 +1299,8 @@ app.post("/api/groups/:groupId/settlements", auth, async (req, res) => {
 
     const guard = assertGroupActive(group, createdByUserId, false);
     if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
+    const guardOpen = assertGroupOpen(group);
+    if (!guardOpen.ok) return res.status(guardOpen.status).json({ error: guardOpen.error, message: guardOpen.message });
 
     const memberSet = new Set(group.memberIds.map(String));
     if (!memberSet.has(String(fromUserId)) || !memberSet.has(String(toUserId))) {
@@ -1348,6 +1356,8 @@ app.post("/api/groups/:groupId/settle-all", auth, async (req, res) => {
 
     const guard = assertGroupActive(group, userId, false);
     if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
+    const guardOpen = assertGroupOpen(group);
+    if (!guardOpen.ok) return res.status(guardOpen.status).json({ error: guardOpen.error, message: guardOpen.message });
 
     const note = String((req.body && req.body.note) || "Settle all").trim();
 
@@ -1402,6 +1412,8 @@ app.delete("/api/groups/:groupId/settlements/:settlementId", auth, async (req, r
 
     const guard = assertGroupActive(group, userId, false);
     if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
+    const guardOpen = assertGroupOpen(group);
+    if (!guardOpen.ok) return res.status(guardOpen.status).json({ error: guardOpen.error, message: guardOpen.message });
 
     const settlement = await Settlement.findById(settlementId);
     if (!settlement) return res.status(404).json({ error: "Settlement not found" });
@@ -1458,6 +1470,8 @@ app.post("/api/groups/:groupId/settlements/:settlementId/restore", auth, async (
 
     const guard = assertGroupActive(group, userId, false);
     if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
+    const guardOpen = assertGroupOpen(group);
+    if (!guardOpen.ok) return res.status(guardOpen.status).json({ error: guardOpen.error, message: guardOpen.message });
 
     const settlement = await Settlement.findById(settlementId);
     if (!settlement) return res.status(404).json({ error: "Settlement not found" });
