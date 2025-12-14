@@ -929,13 +929,81 @@ app.get("/api/groups/:groupId/audit", auth, async (req, res) => {
     if (action) filtered = filtered.filter((e) => e.action === action);
     if (beforeDate) filtered = filtered.filter((e) => new Date(e.at).getTime() < beforeDate.getTime());
 
-    const sliced = filtered.slice(0, limit);
-    const nextBefore = sliced.length > 0 ? sliced[sliced.length - 1].at : null;
+    const normalizeTimelineItem = (raw) => {
+      const base = raw && typeof raw === "object" ? raw : {};
+      const kind = String(base.kind || "unknown");
+      const atRaw = base.at || base.createdAt || base.updatedAt || new Date().toISOString();
+      const atDate = new Date(atRaw);
+      const at = isNaN(atDate.getTime()) ? new Date().toISOString() : atDate.toISOString();
+
+      const payload =
+        base && typeof base.payload === "object" && base.payload !== null ? base.payload : {};
+
+      const explicitKind = base.kind || `${base.type || ""}_${base.action || "event"}`.replace(/^_/, "unknown_");
+      const isGroupKind = explicitKind.startsWith("group_") || ["group_closed", "group_reopened"].includes(explicitKind);
+      const isExpenseKind = explicitKind.startsWith("expense_");
+      const isSettlementKind = explicitKind.startsWith("settlement_");
+
+      const entityType = isExpenseKind ? "expense" : isSettlementKind ? "settlement" : "group";
+
+      const rawEntityId =
+        base.entity?.id ||
+        base.entityId ||
+        base.expenseId ||
+        base.settlementId ||
+        base.groupId ||
+        base._id ||
+        "";
+      const entityId = rawEntityId ? String(rawEntityId) : "";
+
+      const actorUserId =
+        base.actorUserId != null
+          ? String(base.actorUserId)
+          : base.actor && typeof base.actor === "object" && (base.actor.id || base.actor._id || base.actor.userId)
+          ? String(base.actor.id || base.actor._id || base.actor.userId)
+          : null;
+
+      const computedId =
+        base.id ??
+        base._id ??
+        (base.entity && base.entity.id) ??
+        base.entityId ??
+        base.expenseId ??
+        base.settlementId ??
+        base.groupId ??
+        `${explicitKind || "unknown"}:${base.groupId || base.entity?.id || "na"}:${new Date(at).getTime()}`;
+      const id = String(computedId);
+      const result = {
+        ...base,
+        kind: explicitKind,
+        at,
+        title: base.title ?? "",
+        subtitle: base.subtitle ?? null,
+        payload,
+        entity: {
+          type: isGroupKind ? "group" : entityType,
+          id: isGroupKind ? String(base.entityId || base.groupId || entityId || "") : entityId,
+          title: base.title ?? "",
+          subtitle: base.subtitle ?? null,
+          payload,
+        },
+        actorUserId,
+      };
+
+      result.id = typeof id === "string" ? id : String(id ?? "");
+
+      return result;
+    };
+
+    const rawEvents = filtered.filter(Boolean).slice(0, limit);
+    const normalizedEvents = rawEvents.map(normalizeTimelineItem);
+    const nextBefore =
+      normalizedEvents.length > 0 ? normalizedEvents[normalizedEvents.length - 1].at : null;
 
     res.json({
       groupId,
-      count: sliced.length,
-      events: sliced,
+      count: normalizedEvents.length,
+      events: normalizedEvents,
       nextBefore,
     });
   } catch (err) {
@@ -1126,214 +1194,6 @@ app.get("/api/groups/:groupId/audit-detailed", auth, async (req, res) => {
     let filtered = events;
     if (type) filtered = filtered.filter((e) => e.type === type);
     if (action) filtered = filtered.filter((e) => e.action === action);
-    if (beforeDate) filtered = filtered.filter((e) => new Date(e.at).getTime() < beforeDate.getTime());
-
-    const sliced = filtered.slice(0, limit);
-    const nextBefore = sliced.length > 0 ? sliced[sliced.length - 1].at : null;
-
-    res.json({
-      groupId,
-      count: sliced.length,
-      events: sliced,
-      nextBefore,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// --- TIMELINE (detailed, with presentation fields) ---
-app.get("/api/groups/:groupId/timeline", auth, async (req, res) => {
-  try {
-    const { groupId } = req.params;
-    const userId = req.user.userId;
-    const { type, action } = req.query || {};
-
-    const validTypes = new Set(["expense", "settlement", "group"]);
-    const validActions = new Set(["created", "deleted", "restored", "closed", "reopened"]);
-
-    if (type && !validTypes.has(String(type))) {
-      return res.status(400).json({ error: "Invalid type. Allowed: expense, settlement, group" });
-    }
-    if (action && !validActions.has(String(action))) {
-      return res
-        .status(400)
-        .json({ error: "Invalid action. Allowed: created, deleted, restored, closed, reopened" });
-    }
-
-    const rawLimit = Number(req.query.limit ?? 50);
-    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 200) : 50;
-    const beforeParam = req.query.before ? new Date(req.query.before) : null;
-    const beforeDate = beforeParam && !isNaN(beforeParam.getTime()) ? beforeParam : null;
-
-    if (!validateObjectId(groupId)) {
-      return res.status(400).json({ error: "Invalid groupId" });
-    }
-
-    const group = await Group.findById(groupId);
-    if (!group) return res.status(404).json({ error: "Group not found" });
-
-    const isMember = group.memberIds.map(String).includes(String(userId));
-    if (!isMember) return res.status(403).json({ error: "Not a member of this group" });
-
-    const includeDeleted = parseIncludeDeleted(req.query.includeDeleted);
-    const guard = assertGroupActive(group, userId, includeDeleted);
-    if (!guard.ok) return res.status(guard.status).json({ error: guard.error });
-
-    const [expenses, settlements] = await Promise.all([
-      Expense.find({ groupId }),
-      Settlement.find({ groupId }),
-    ]);
-
-    const userIds = new Set();
-    const collect = (id) => {
-      if (id) userIds.add(String(id));
-    };
-
-    collect(group.closedByUserId);
-    collect(group.reopenedByUserId);
-
-    for (const exp of expenses) {
-      collect(exp.paidByUserId);
-      collect(exp.deletedByUserId);
-      collect(exp.restoredByUserId);
-    }
-    for (const s of settlements) {
-      collect(s.createdByUserId);
-      collect(s.deletedByUserId);
-      collect(s.restoredByUserId);
-      collect(s.fromUserId);
-      collect(s.toUserId);
-    }
-
-    const users = await User.find({ _id: { $in: Array.from(userIds) } }).select("name email");
-    const userMap = {};
-    for (const u of users) {
-      userMap[String(u._id)] = { id: String(u._id), name: u.name, email: u.email };
-    }
-    const mapUser = (id) => {
-      if (!id) return null;
-      const key = String(id);
-      return userMap[key] || { id: key };
-    };
-
-    const events = [];
-
-    if (group.closedAt) {
-      events.push({
-        at: group.closedAt,
-        entityId: String(groupId),
-        kind: "group_closed",
-        title: "Group closed",
-        subtitle: group.name,
-        actor: mapUser(group.closedByUserId),
-        payload: { name: group.name },
-      });
-    }
-
-    if (group.reopenedAt) {
-      events.push({
-        at: group.reopenedAt,
-        entityId: String(groupId),
-        kind: "group_reopened",
-        title: "Group reopened",
-        subtitle: group.name,
-        actor: mapUser(group.reopenedByUserId),
-        payload: { name: group.name },
-      });
-    }
-
-    for (const exp of expenses) {
-      const meta = {
-        title: exp.title,
-        amount: Number(exp.amount),
-        paidBy: mapUser(exp.paidByUserId),
-      };
-      events.push({
-        at: exp.createdAt,
-        entityId: String(exp._id),
-        kind: "expense_created",
-        title: `${meta.title} — ${meta.amount}`,
-        subtitle: meta.paidBy && meta.paidBy.name ? `Paid by ${meta.paidBy.name}` : "Paid",
-        actor: mapUser(exp.paidByUserId),
-        payload: meta,
-      });
-
-      if (exp.isDeleted && exp.deletedAt) {
-        events.push({
-          at: exp.deletedAt,
-          entityId: String(exp._id),
-          kind: "expense_deleted",
-          title: `${meta.title} — ${meta.amount}`,
-          subtitle: meta.paidBy && meta.paidBy.name ? `Deleted by ${meta.paidBy.name}` : "Deleted",
-          actor: mapUser(exp.deletedByUserId),
-          payload: meta,
-        });
-      }
-
-      if (exp.restoredAt) {
-        events.push({
-          at: exp.restoredAt,
-          entityId: String(exp._id),
-          kind: "expense_restored",
-          title: `${meta.title} — ${meta.amount}`,
-          subtitle: "Restored",
-          actor: mapUser(exp.restoredByUserId),
-          payload: meta,
-        });
-      }
-    }
-
-    for (const s of settlements) {
-      const meta = {
-        from: mapUser(s.fromUserId),
-        to: mapUser(s.toUserId),
-        amount: Number(s.amount),
-        note: s.note || "",
-      };
-      const baseTitle = `${meta.from?.name || "From"} → ${meta.to?.name || "To"}`;
-      const baseSubtitle = meta.note ? `${meta.amount} — ${meta.note}` : `${meta.amount}`;
-
-      events.push({
-        at: s.createdAt,
-        entityId: String(s._id),
-        kind: "settlement_created",
-        title: baseTitle,
-        subtitle: baseSubtitle,
-        actor: mapUser(s.createdByUserId),
-        payload: meta,
-      });
-
-      if (s.isDeleted && s.deletedAt) {
-        events.push({
-          at: s.deletedAt,
-          entityId: String(s._id),
-          kind: "settlement_deleted",
-          title: baseTitle,
-          subtitle: "Deleted",
-          actor: mapUser(s.deletedByUserId),
-          payload: meta,
-        });
-      }
-
-      if (s.restoredAt) {
-        events.push({
-          at: s.restoredAt,
-          entityId: String(s._id),
-          kind: "settlement_restored",
-          title: baseTitle,
-          subtitle: "Restored",
-          actor: mapUser(s.restoredByUserId),
-          payload: meta,
-        });
-      }
-    }
-
-    events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
-
-    let filtered = events;
-    if (type) filtered = filtered.filter((e) => e.kind.startsWith(type));
-    if (action) filtered = filtered.filter((e) => e.kind.endsWith(action));
     if (beforeDate) filtered = filtered.filter((e) => new Date(e.at).getTime() < beforeDate.getTime());
 
     const sliced = filtered.slice(0, limit);
