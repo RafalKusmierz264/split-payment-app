@@ -636,6 +636,22 @@ app.get("/api/groups/:groupId/audit", auth, async (req, res) => {
   try {
     const { groupId } = req.params;
     const userId = req.user.userId;
+    const { type, action } = req.query || {};
+
+    const validTypes = new Set(["expense", "settlement"]);
+    const validActions = new Set(["created", "deleted", "restored"]);
+
+    if (type && !validTypes.has(String(type))) {
+      return res.status(400).json({ error: "Invalid type. Allowed: expense, settlement" });
+    }
+    if (action && !validActions.has(String(action))) {
+      return res.status(400).json({ error: "Invalid action. Allowed: created, deleted, restored" });
+    }
+
+    const rawLimit = Number(req.query.limit ?? 50);
+    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 200) : 50;
+    const beforeParam = req.query.before ? new Date(req.query.before) : null;
+    const beforeDate = beforeParam && !isNaN(beforeParam.getTime()) ? beforeParam : null;
 
     if (!validateObjectId(groupId)) {
       return res.status(400).json({ error: "Invalid groupId" });
@@ -656,107 +672,138 @@ app.get("/api/groups/:groupId/audit", auth, async (req, res) => {
       Settlement.find({ groupId }),
     ]);
 
+    // spójna struktura eventów – frontend oczekuje kompletu pól niezależnie od filtrów/paginacji
+    const makeEvent = ({ at, type, action, entityId, actorUserId, meta }) => ({
+      at,
+      type,
+      action,
+      entityId: String(entityId),
+      actorUserId: actorUserId ? String(actorUserId) : null,
+      meta: meta || {},
+    });
+
     const events = [];
 
     for (const exp of expenses) {
-      events.push({
-        at: exp.createdAt,
-        type: "expense",
-        action: "created",
-        entityId: String(exp._id),
-        actorUserId: exp.paidByUserId ? String(exp.paidByUserId) : null,
-        meta: {
-          title: exp.title,
-          amount: Number(exp.amount),
-          paidByUserId: exp.paidByUserId ? String(exp.paidByUserId) : null,
-        },
-      });
-
-      if (exp.isDeleted && exp.deletedAt) {
-        events.push({
-          at: exp.deletedAt,
+      events.push(
+        makeEvent({
+          at: exp.createdAt,
           type: "expense",
-          action: "deleted",
-          entityId: String(exp._id),
-          actorUserId: exp.deletedByUserId ? String(exp.deletedByUserId) : null,
+          action: "created",
+          entityId: exp._id,
+          actorUserId: exp.paidByUserId,
           meta: {
             title: exp.title,
             amount: Number(exp.amount),
             paidByUserId: exp.paidByUserId ? String(exp.paidByUserId) : null,
           },
-        });
+        })
+      );
+
+      if (exp.isDeleted && exp.deletedAt) {
+        events.push(
+          makeEvent({
+            at: exp.deletedAt,
+            type: "expense",
+            action: "deleted",
+            entityId: exp._id,
+            actorUserId: exp.deletedByUserId,
+            meta: {
+              title: exp.title,
+              amount: Number(exp.amount),
+              paidByUserId: exp.paidByUserId ? String(exp.paidByUserId) : null,
+            },
+          })
+        );
       }
 
       if (exp.restoredAt) {
-        events.push({
-          at: exp.restoredAt,
-          type: "expense",
-          action: "restored",
-          entityId: String(exp._id),
-          actorUserId: exp.restoredByUserId ? String(exp.restoredByUserId) : null,
-          meta: {
-            title: exp.title,
-            amount: Number(exp.amount),
-            paidByUserId: exp.paidByUserId ? String(exp.paidByUserId) : null,
-          },
-        });
+        events.push(
+          makeEvent({
+            at: exp.restoredAt,
+            type: "expense",
+            action: "restored",
+            entityId: exp._id,
+            actorUserId: exp.restoredByUserId,
+            meta: {
+              title: exp.title,
+              amount: Number(exp.amount),
+              paidByUserId: exp.paidByUserId ? String(exp.paidByUserId) : null,
+            },
+          })
+        );
       }
     }
 
     for (const s of settlements) {
-      events.push({
-        at: s.createdAt,
-        type: "settlement",
-        action: "created",
-        entityId: String(s._id),
-        actorUserId: s.createdByUserId ? String(s.createdByUserId) : null,
-        meta: {
-          fromUserId: s.fromUserId ? String(s.fromUserId) : null,
-          toUserId: s.toUserId ? String(s.toUserId) : null,
-          amount: Number(s.amount),
-          note: s.note || "",
-        },
-      });
-
-      if (s.isDeleted && s.deletedAt) {
-        events.push({
-          at: s.deletedAt,
+      events.push(
+        makeEvent({
+          at: s.createdAt,
           type: "settlement",
-          action: "deleted",
-          entityId: String(s._id),
-          actorUserId: s.deletedByUserId ? String(s.deletedByUserId) : null,
+          action: "created",
+          entityId: s._id,
+          actorUserId: s.createdByUserId,
           meta: {
             fromUserId: s.fromUserId ? String(s.fromUserId) : null,
             toUserId: s.toUserId ? String(s.toUserId) : null,
             amount: Number(s.amount),
             note: s.note || "",
           },
-        });
+        })
+      );
+
+      if (s.isDeleted && s.deletedAt) {
+        events.push(
+          makeEvent({
+            at: s.deletedAt,
+            type: "settlement",
+            action: "deleted",
+            entityId: s._id,
+            actorUserId: s.deletedByUserId,
+            meta: {
+              fromUserId: s.fromUserId ? String(s.fromUserId) : null,
+              toUserId: s.toUserId ? String(s.toUserId) : null,
+              amount: Number(s.amount),
+              note: s.note || "",
+            },
+          })
+        );
       }
 
       if (s.restoredAt) {
-        events.push({
-          at: s.restoredAt,
-          type: "settlement",
-          action: "restored",
-          entityId: String(s._id),
-          actorUserId: s.restoredByUserId ? String(s.restoredByUserId) : null,
-          meta: {
-            fromUserId: s.fromUserId ? String(s.fromUserId) : null,
-            toUserId: s.toUserId ? String(s.toUserId) : null,
-            amount: Number(s.amount),
-            note: s.note || "",
-          },
-        });
+        events.push(
+          makeEvent({
+            at: s.restoredAt,
+            type: "settlement",
+            action: "restored",
+            entityId: s._id,
+            actorUserId: s.restoredByUserId,
+            meta: {
+              fromUserId: s.fromUserId ? String(s.fromUserId) : null,
+              toUserId: s.toUserId ? String(s.toUserId) : null,
+              amount: Number(s.amount),
+              note: s.note || "",
+            },
+          })
+        );
       }
     }
 
     events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
 
+    let filtered = events;
+    if (type) filtered = filtered.filter((e) => e.type === type);
+    if (action) filtered = filtered.filter((e) => e.action === action);
+    if (beforeDate) filtered = filtered.filter((e) => new Date(e.at).getTime() < beforeDate.getTime());
+
+    const sliced = filtered.slice(0, limit);
+    const nextBefore = sliced.length > 0 ? sliced[sliced.length - 1].at : null;
+
     res.json({
       groupId,
-      count: events.length,
-      events,
+      count: sliced.length,
+      events: sliced,
+      nextBefore,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -768,6 +815,22 @@ app.get("/api/groups/:groupId/audit-detailed", auth, async (req, res) => {
   try {
     const { groupId } = req.params;
     const userId = req.user.userId;
+    const { type, action } = req.query || {};
+
+    const validTypes = new Set(["expense", "settlement"]);
+    const validActions = new Set(["created", "deleted", "restored"]);
+
+    if (type && !validTypes.has(String(type))) {
+      return res.status(400).json({ error: "Invalid type. Allowed: expense, settlement" });
+    }
+    if (action && !validActions.has(String(action))) {
+      return res.status(400).json({ error: "Invalid action. Allowed: created, deleted, restored" });
+    }
+
+    const rawLimit = Number(req.query.limit ?? 50);
+    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 200) : 50;
+    const beforeParam = req.query.before ? new Date(req.query.before) : null;
+    const beforeDate = beforeParam && !isNaN(beforeParam.getTime()) ? beforeParam : null;
 
     if (!validateObjectId(groupId)) {
       return res.status(400).json({ error: "Invalid groupId" });
@@ -900,10 +963,19 @@ app.get("/api/groups/:groupId/audit-detailed", auth, async (req, res) => {
 
     events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
 
+    let filtered = events;
+    if (type) filtered = filtered.filter((e) => e.type === type);
+    if (action) filtered = filtered.filter((e) => e.action === action);
+    if (beforeDate) filtered = filtered.filter((e) => new Date(e.at).getTime() < beforeDate.getTime());
+
+    const sliced = filtered.slice(0, limit);
+    const nextBefore = sliced.length > 0 ? sliced[sliced.length - 1].at : null;
+
     res.json({
       groupId,
-      count: events.length,
-      events,
+      count: sliced.length,
+      events: sliced,
+      nextBefore,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
