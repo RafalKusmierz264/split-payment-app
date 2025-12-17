@@ -18,12 +18,53 @@ import {
 
 const styles = {
   container: {
-    maxWidth: "720px",
+    maxWidth: "1100px",
     margin: "28px auto",
     padding: "18px",
     border: "1px solid #ddd",
     borderRadius: "8px",
     fontFamily: "Inter, system-ui, sans-serif",
+  },
+  pageLayout: {
+    display: "grid",
+    gridTemplateColumns: "1fr",
+    gap: "16px",
+    alignItems: "start",
+  },
+  pageLayoutDesktop: {
+    display: "grid",
+    gridTemplateColumns: "1fr 2fr",
+    gap: "16px",
+    alignItems: "start",
+  },
+  sectionCard: {
+    background: "#fff",
+    border: "1px solid #eee",
+    borderRadius: "12px",
+    padding: "14px",
+  },
+  sectionHeaderRow: {
+    display: "flex",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: "12px",
+    marginBottom: "10px",
+  },
+  sectionHeaderLeft: { display: "flex", alignItems: "baseline", gap: "10px" },
+  sectionTitle: { margin: 0 },
+  sectionMeta: { color: "#666", fontSize: "13px" },
+  rightStack: { display: "flex", flexDirection: "column", gap: "12px" },
+  leftStack: { display: "flex", flexDirection: "column", gap: "12px" },
+  expenseFormGrid: {
+    display: "grid",
+    gridTemplateColumns: "1fr 140px 200px auto",
+    gap: "10px",
+    alignItems: "center",
+  },
+  expenseFormGridMobile: {
+    display: "grid",
+    gridTemplateColumns: "1fr",
+    gap: "10px",
   },
   headerRow: { display: "flex", justifyContent: "space-between", alignItems: "center" },
   button: {
@@ -99,6 +140,7 @@ export default function GroupDetailsPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const timelineRef = useRef(null);
+  const isDesktop = window.innerWidth >= 1024;
 
   const [group, setGroup] = useState(null);
   const [titleName, setTitleName] = useState(() => location.state?.name || "");
@@ -444,80 +486,91 @@ export default function GroupDetailsPage() {
     }, 0);
   };
 
-  const renderMembersAndBalance = () => (
-    <>
-      <div style={{ marginTop: "10px" }}>
-        <h3 style={{ margin: "10px 0 6px" }}>Saldo</h3>
-        {balancesLoading && <p style={styles.muted}>Wczytywanie sald...</p>}
-        {!balancesLoading && balancesError && <div style={styles.error}>{balancesError}</div>}
-        {!balancesLoading && !balancesError && balances.length === 0 && <p style={styles.muted}>Brak sald.</p>}
-        {!balancesLoading && !balancesError && balances.length > 0 && (
-          <div>
-            {balances.map((b) => {
-              const candidates = [b.userId, b.memberId, b.user, b.member];
-              let member = null;
-              for (const candidate of candidates) {
-                const cid = getId(candidate);
-                if (!cid) continue;
-                member = memberByUserId.get(cid) || memberByMemberId.get(cid);
-                if (member) break;
-              }
-                  const label = member ? roleLabel(member.role) : roleLabel();
-                  return (
-                    <div key={b.userId || b.memberId} style={{ padding: "4px 0" }}>
-                      <span>
-                        <strong>{label}</strong>
-                      </span>
-                      <span style={{ marginLeft: "8px" }}>{formatPLN(b.amount)}</span>
-                    </div>
-                  );
-                })}
+  const renderBalanceCard = () => (
+    <div style={styles.sectionCard}>
+      <div style={styles.sectionHeaderRow}>
+        <div style={styles.sectionHeaderLeft}>
+          <h3 style={styles.sectionTitle}>Saldo</h3>
+        </div>
+      </div>
+
+      {balancesLoading && <p style={styles.muted}>Wczytywanie sald...</p>}
+      {!balancesLoading && balancesError && <div style={styles.error}>{balancesError}</div>}
+      {!balancesLoading && !balancesError && balances.length === 0 && <p style={styles.muted}>Brak sald.</p>}
+      {!balancesLoading && !balancesError && balances.length > 0 && (
+        <div>
+          {balances.map((b) => {
+            const candidates = [b.userId, b.memberId, b.user, b.member];
+            let member = null;
+            for (const candidate of candidates) {
+              const cid = getId(candidate);
+              if (!cid) continue;
+              member = memberByUserId.get(cid) || memberByMemberId.get(cid);
+              if (member) break;
+            }
+            const label = member ? roleLabel(member.role) : roleLabel();
+            return (
+              <div key={b.userId || b.memberId} style={{ padding: "4px 0" }}>
+                <span>
+                  <strong>{label}</strong>
+                </span>
+                <span style={{ marginLeft: "8px" }}>{formatPLN(b.amount)}</span>
               </div>
-            )}
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+
+  const renderMembersCard = () => (
+    <div style={styles.sectionCard}>
+      <div style={styles.sectionHeaderRow}>
+        <div style={styles.sectionHeaderLeft}>
+          <h3 style={styles.sectionTitle}>Członkowie</h3>
+          <span style={styles.sectionMeta}>({membersCount})</span>
+        </div>
       </div>
 
-      <div style={{ marginTop: "10px" }}>
-        <h3 style={{ margin: "10px 0 6px" }}>Członkowie - Liczba członków: {membersCount}</h3>
-        {memberOptions.length > 0 ? (
-          <ul style={styles.memberList}>
-            {memberOptions.map((m) => (
-              <li key={m.id} style={styles.memberItem}>
-                <div>
-                  <strong>{roleLabel(m.role)}</strong>
-                </div>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p style={styles.muted}>Brak szczegółów członków (tylko ID).</p>
-        )}
+      {memberOptions.length > 0 ? (
+        <ul style={styles.memberList}>
+          {memberOptions.map((m) => (
+            <li key={m.id} style={styles.memberItem}>
+              <div>
+                <strong>{roleLabel(m.role)}</strong>
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p style={styles.muted}>Brak szczegółów członków (tylko ID).</p>
+      )}
 
-        <form onSubmit={handleAddMember} style={{ marginTop: "10px" }}>
-          <div style={styles.formRow}>
-            <input
-              style={styles.input}
-              type="email"
-              placeholder="email@przyklad.pl"
-              value={memberEmail}
-              onChange={(e) => setMemberEmail(e.target.value)}
-              required
-            />
-            <button style={styles.button} type="submit" disabled={memberAdding || !memberEmail.trim()}>
-              {memberAdding ? "Dodawanie..." : "Dodaj"}
-            </button>
-          </div>
-          {memberError && <div style={styles.error}>{memberError}</div>}
-        </form>
-      </div>
-    </>
+      <form onSubmit={handleAddMember} style={{ marginTop: "10px" }}>
+        <div style={styles.formRow}>
+          <input
+            style={styles.input}
+            type="email"
+            placeholder="email@przyklad.pl"
+            value={memberEmail}
+            onChange={(e) => setMemberEmail(e.target.value)}
+            required
+          />
+          <button style={styles.button} type="submit" disabled={memberAdding || !memberEmail.trim()}>
+            {memberAdding ? "Dodawanie..." : "Dodaj"}
+          </button>
+        </div>
+        {memberError && <div style={styles.error}>{memberError}</div>}
+      </form>
+    </div>
   );
 
   const renderExpenseForm = () => (
     <>
       <form onSubmit={handleAddExpense}>
-        <div style={styles.formRow}>
+        <div style={isDesktop ? styles.expenseFormGrid : styles.expenseFormGridMobile}>
           <input
-            style={styles.input}
+            style={{ ...styles.input, minWidth: "unset", width: "100%" }}
             type="text"
             placeholder="Opis"
             value={expenseDesc}
@@ -525,7 +578,7 @@ export default function GroupDetailsPage() {
             required
           />
           <input
-            style={styles.input}
+            style={{ ...styles.input, minWidth: "unset", width: "100%" }}
             type="number"
             step="0.01"
             min="0"
@@ -535,7 +588,7 @@ export default function GroupDetailsPage() {
             required
           />
           <select
-            style={styles.select}
+            style={{ ...styles.select, minWidth: "unset", width: "100%" }}
             value={expensePayerUserId}
             onChange={(e) => setExpensePayerUserId(e.target.value)}
             required
@@ -568,10 +621,14 @@ export default function GroupDetailsPage() {
     </>
   );
 
-  const renderExpensesList = () => (
-    <div style={{ marginTop: "12px" }}>
-      <h4 style={{ margin: "10px 0 6px" }}>
-        Wydatki (ostatnie {latestExpenses.length} z {expenses.length}){" "}
+  const renderExpensesListCard = () => (
+    <div style={styles.sectionCard}>
+      <div style={styles.sectionHeaderRow}>
+        <div style={styles.sectionHeaderLeft}>
+          <h3 style={styles.sectionTitle}>
+            Wydatki (ostatnie {latestExpenses.length} z {expenses.length})
+          </h3>
+        </div>
         <button
           type="button"
           onClick={scrollToTimeline}
@@ -579,7 +636,6 @@ export default function GroupDetailsPage() {
             background: "transparent",
             border: "none",
             padding: 0,
-            marginLeft: "8px",
             fontSize: "0.85rem",
             color: "#2563eb",
             cursor: "pointer",
@@ -588,7 +644,8 @@ export default function GroupDetailsPage() {
         >
           Zobacz w historii
         </button>
-      </h4>
+      </div>
+
       {expensesLoading && <p style={styles.muted}>Wczytywanie wydatków...</p>}
       {!expensesLoading && expensesError && <div style={styles.error}>{expensesError}</div>}
       {!expensesLoading && !expensesError && expenses.length === 0 && <p style={styles.muted}>Brak wydatków.</p>}
@@ -609,7 +666,7 @@ export default function GroupDetailsPage() {
               </div>
             );
           })}
-          <div style={{ marginTop: "6px" }}>
+          <div style={{ marginTop: "10px" }}>
             <div style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
               <button
                 type="button"
@@ -638,7 +695,7 @@ export default function GroupDetailsPage() {
                 Miesiąc
               </button>
             </div>
-            <div style={{ ...styles.subtitle, marginTop: "4px", fontWeight: 600 }}>
+            <div style={{ ...styles.subtitle, marginTop: "6px", fontWeight: 600 }}>
               {expenseSummaryMode === "week"
                 ? `Wydatki w tym tygodniu: ${formatPLN(summarySum)}`
                 : `Wydatki w tym miesiącu: ${formatPLN(summarySum)}`}
@@ -650,9 +707,11 @@ export default function GroupDetailsPage() {
   );
 
   const renderTransfers = () => (
-    <div style={{ marginTop: "16px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-        <h3 style={{ margin: 0 }}>Sugerowane przelewy</h3>
+    <div>
+      <div style={styles.sectionHeaderRow}>
+        <div style={styles.sectionHeaderLeft}>
+          <h3 style={styles.sectionTitle}>Sugerowane przelewy</h3>
+        </div>
         <button style={{ ...styles.button, padding: "5px 9px" }} onClick={fetchTransfers} disabled={transfersLoading}>
           {transfersLoading ? "Odświeżam..." : "Odśwież przelewy"}
         </button>
@@ -714,9 +773,11 @@ export default function GroupDetailsPage() {
   );
 
   const renderTimeline = () => (
-    <div style={styles.timeline} ref={timelineRef}>
-      <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-        <h3 style={{ margin: 0 }}>Historia</h3>
+    <div style={styles.sectionCard} ref={timelineRef}>
+      <div style={styles.sectionHeaderRow}>
+        <div style={styles.sectionHeaderLeft}>
+          <h3 style={styles.sectionTitle}>Historia</h3>
+        </div>
         <button style={styles.button} onClick={() => setShowTimeline((v) => !v)}>
           {showTimeline ? "Ukryj historię" : "Pokaż historię"}
         </button>
@@ -781,52 +842,67 @@ export default function GroupDetailsPage() {
       {!loading && !error && !group && <p style={styles.muted}>Nie znaleziono grupy.</p>}
 
       {!loading && group && (
-        <div>
-          {editing ? (
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-              <input
-                style={{ padding: "8px 12px", borderRadius: "6px", border: "1px solid " + "#ccc", minWidth: "260px" }}
-                value={nameInput}
-                onChange={(e) => setNameInput(e.target.value)}
-                disabled={saving}
-              />
-              <button style={styles.button} onClick={handleSaveName} disabled={saving || !nameInput.trim()}>
-                {saving ? "Zapisywanie..." : "Zapisz"}
-              </button>
-              <button
-                style={{ ...styles.button, background: "#6b7280" }}
-                onClick={() => {
-                  setEditing(false);
-                  setNameInput(group.name || "");
-                  setError(null);
-                }}
-                disabled={saving}
-              >
-                Anuluj
-              </button>
-            </div>
-          ) : (
-            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-              <button style={{ ...styles.button, background: "#2563eb" }} onClick={() => setEditing(true)}>
-                Zmień nazwę
-              </button>
-            </div>
-          )}
-
-          {renderMembersAndBalance()}
-
-          <div style={{ marginTop: "16px" }}>
-            <h3 style={{ margin: "10px 0 6px" }}>Wydatki</h3>
-            {renderExpenseForm()}
-            {renderExpensesList()}
+        <>
+          <div style={{ marginBottom: "12px" }}>
+            {editing ? (
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                <input
+                  style={{ padding: "8px 12px", borderRadius: "6px", border: "1px solid " + "#ccc", minWidth: "260px" }}
+                  value={nameInput}
+                  onChange={(e) => setNameInput(e.target.value)}
+                  disabled={saving}
+                />
+                <button style={styles.button} onClick={handleSaveName} disabled={saving || !nameInput.trim()}>
+                  {saving ? "Zapisywanie..." : "Zapisz"}
+                </button>
+                <button
+                  style={{ ...styles.button, background: "#6b7280" }}
+                  onClick={() => {
+                    setEditing(false);
+                    setNameInput(group.name || "");
+                    setError(null);
+                  }}
+                  disabled={saving}
+                >
+                  Anuluj
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                <button style={{ ...styles.button, background: "#2563eb" }} onClick={() => setEditing(true)}>
+                  Zmień nazwę
+                </button>
+              </div>
+            )}
           </div>
 
-          {renderTransfers()}
-        </div>
+          <div style={isDesktop ? styles.pageLayoutDesktop : styles.pageLayout}>
+            <div style={styles.leftStack}>
+              {renderBalanceCard()}
+              {renderMembersCard()}
+            </div>
+
+            <div style={styles.rightStack}>
+              <div style={styles.sectionCard}>
+                <div style={styles.sectionHeaderRow}>
+                  <div style={styles.sectionHeaderLeft}>
+                    <h3 style={styles.sectionTitle}>Wydatki</h3>
+                  </div>
+                </div>
+                {renderExpenseForm()}
+              </div>
+
+              {renderExpensesListCard()}
+
+              <div style={styles.sectionCard}>
+                {renderTransfers()}
+              </div>
+
+              {renderTimeline()}
+            </div>
+          </div>
+        </>
       )}
-
-      {renderTimeline()}
-
     </div>
   );
 }
